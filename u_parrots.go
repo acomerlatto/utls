@@ -3293,6 +3293,7 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 						reusableClassicalKeys[curveID] = keysForCurve[1:]
 
 						ext.KeyShares[i].Data = reusedKey.PublicKey().Bytes()
+						uconn.HandshakeState.State13.KeyShareKeys.setEcdheForGroup(curveID, reusedKey) // [eidolon]
 						if !preferredCurveIsSet {
 							// only do this once for the first non-grease curve
 							uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = reusedKey
@@ -3308,6 +3309,7 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					}
 
 					ext.KeyShares[i].Data = ecdheKey.PublicKey().Bytes()
+					uconn.HandshakeState.State13.KeyShareKeys.setEcdheForGroup(curveID, ecdheKey) // [eidolon]
 					if !preferredCurveIsSet {
 						// only do this once for the first non-grease curve
 						uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = ecdheKey

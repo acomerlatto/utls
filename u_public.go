@@ -928,6 +928,11 @@ type KeySharePrivateKeys struct {
 	Ecdhe      *ecdh.PrivateKey
 	Mlkem      crypto.Decapsulator
 	MlkemEcdhe *ecdh.PrivateKey
+
+	// [eidolon] EcdheByGroup holds the private key of each classical key
+	// share offered. When the server selects a group present here, its key
+	// is used instead of Ecdhe.
+	EcdheByGroup map[CurveID]*ecdh.PrivateKey
 }
 
 func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
@@ -936,9 +941,10 @@ func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
 	}
 	return &keySharePrivateKeys{
 		// curveID:    ksp.CurveID,
-		ecdhe:      ksp.Ecdhe,
-		mlkem:      ksp.Mlkem,
-		mlkemEcdhe: ksp.MlkemEcdhe,
+		ecdhe:        ksp.Ecdhe,
+		mlkem:        ksp.Mlkem,
+		mlkemEcdhe:   ksp.MlkemEcdhe,
+		ecdheByGroup: ksp.EcdheByGroup,
 	}
 }
 
@@ -948,8 +954,21 @@ func (ksp *keySharePrivateKeys) ToPublic() *KeySharePrivateKeys {
 	}
 	return &KeySharePrivateKeys{
 		// CurveID:    ksp.curveID,
-		Ecdhe:      ksp.ecdhe,
-		Mlkem:      ksp.mlkem,
-		MlkemEcdhe: ksp.mlkemEcdhe,
+		Ecdhe:        ksp.ecdhe,
+		Mlkem:        ksp.mlkem,
+		MlkemEcdhe:   ksp.mlkemEcdhe,
+		EcdheByGroup: ksp.ecdheByGroup,
+	}
+}
+
+// [eidolon] setEcdheForGroup records the private key of a classical key share.
+// RFC 8446, Section 4.2.8 forbids two shares for the same group; if a spec
+// does it anyway, the first key is kept.
+func (ksp *KeySharePrivateKeys) setEcdheForGroup(group CurveID, key *ecdh.PrivateKey) {
+	if ksp.EcdheByGroup == nil {
+		ksp.EcdheByGroup = make(map[CurveID]*ecdh.PrivateKey)
+	}
+	if _, ok := ksp.EcdheByGroup[group]; !ok {
+		ksp.EcdheByGroup[group] = key
 	}
 }
