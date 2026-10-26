@@ -1,4 +1,4 @@
-module github.com/refraction-networking/utls
+module github.com/acomerlatto/utls
 
 go 1.27
 
