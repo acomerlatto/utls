@@ -21,6 +21,7 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 | ID | Commit | Change | Test |
 |---|---|---|---|
 | U1a | `816358f` | Use the private key of the classical key share the server selected, not always the first one (`EcdheByGroup`) | `u_eidolon_keyshare_test.go` |
+| U1b | test only | Regression for the per-connection GREASE value in `signature_algorithms`, drawn from the seed (the substitution is upstream code). Ported from bogdanfinn/utls | `u_eidolon_grease_sigalg_test.go` |
 | — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
