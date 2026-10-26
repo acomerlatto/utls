@@ -20,8 +20,8 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 
 | ID | Commit | Change | Test |
 |---|---|---|---|
-| U1a | `ba0bec6` | Use the private key of the classical key share the server selected, not always the first one (`EcdheByGroup`) | `u_eidolon_keyshare_test.go` |
-| — | "Rename module to github.com/acomerlatto/utls" | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
+| U1a | `816358f` | Use the private key of the classical key share the server selected, not always the first one (`EcdheByGroup`) | `u_eidolon_keyshare_test.go` |
+| — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
 
