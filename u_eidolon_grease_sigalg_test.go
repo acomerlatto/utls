@@ -10,8 +10,9 @@ import (
 // itself is upstream code in ApplyPreset.
 
 // eidolonSigAlgGREASESpec returns a spec whose signature_algorithms starts
-// with the GREASE placeholder, like Chrome's list. Each connection needs a new
-// spec, because ApplyPreset overwrites the placeholder in place.
+// with the GREASE placeholder. RFC 8701 allows GREASE there; whether a
+// browser profile sends it must come from a capture, not from this test.
+// ApplyPreset clones the spec, so the placeholder is replaced in the copy.
 func eidolonSigAlgGREASESpec() ClientHelloSpec {
 	return ClientHelloSpec{
 		TLSVersMin:         VersionTLS12,
