@@ -301,9 +301,25 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 			return err
 		}
 	} else if hs.serverHello.encryptedClientHello != nil {
-		// Unsolicited ECH extension should be rejected
-		c.sendAlert(alertUnsupportedExtension)
-		return errors.New("tls: unexpected encrypted client hello extension in serverHello")
+		// [eidolon] With GREASE ECH the client offered the extension without
+		// an ECH config, so the server may answer it in the HRR: check the
+		// syntax and otherwise ignore it (RFC 9849, Sections 6.2.1 and 7.1;
+		// BoringSSL check_ech_confirmation). Without any ECH extension sent,
+		// it is still unsolicited.
+		sent, err := clientHelloExtensions(hs.hello)
+		if err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
+		if _, ok := sent[extensionEncryptedClientHello]; !ok {
+			// Unsolicited ECH extension should be rejected
+			c.sendAlert(alertUnsupportedExtension)
+			return errors.New("tls: unexpected encrypted client hello extension in serverHello")
+		}
+		if len(hs.serverHello.encryptedClientHello) != 8 {
+			c.sendAlert(alertDecodeError)
+			return errors.New("tls: malformed encrypted client hello extension")
+		}
 	}
 
 	// The only HelloRetryRequest extensions we support are key_share and

@@ -18,6 +18,7 @@ import (
 	"github.com/acomerlatto/utls/internal/tls13"
 	"github.com/klauspost/compress/zstd"
 	"github.com/molecule-man/go-brrr"
+	"golang.org/x/crypto/cryptobyte"
 )
 
 // This function is called by (*clientHandshakeStateTLS13).readServerCertificate()
@@ -602,4 +603,38 @@ func (c *UConn) echTranscriptMsg(outer *clientHelloMsg, echCtx *echClientContext
 	}
 
 	return nil
+}
+
+// [eidolon] clientHelloExtensions returns the extensions of hello as marshaled
+// and sent, by type. Checks against what the client offered use this instead
+// of the clientHelloMsg fields, which do not cover extensions added by uTLS.
+func clientHelloExtensions(hello *clientHelloMsg) (map[uint16][]byte, error) {
+	raw, err := hello.marshal()
+	if err != nil {
+		return nil, err
+	}
+	s := cryptobyte.String(raw)
+	var sessionID, cipherSuites, compressionMethods, extensions cryptobyte.String
+	if !s.Skip(4+2+32) || // message header, legacy_version and random
+		!s.ReadUint8LengthPrefixed(&sessionID) ||
+		!s.ReadUint16LengthPrefixed(&cipherSuites) ||
+		!s.ReadUint8LengthPrefixed(&compressionMethods) {
+		return nil, errors.New("tls: internal error: malformed ClientHello")
+	}
+	exts := make(map[uint16][]byte)
+	if s.Empty() {
+		return exts, nil
+	}
+	if !s.ReadUint16LengthPrefixed(&extensions) || !s.Empty() {
+		return nil, errors.New("tls: internal error: malformed ClientHello")
+	}
+	for !extensions.Empty() {
+		var typ uint16
+		var data cryptobyte.String
+		if !extensions.ReadUint16(&typ) || !extensions.ReadUint16LengthPrefixed(&data) {
+			return nil, errors.New("tls: internal error: malformed ClientHello")
+		}
+		exts[typ] = data
+	}
+	return exts, nil
 }
