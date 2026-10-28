@@ -22,6 +22,11 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 |---|---|---|---|
 | U1a | `816358f` | Use the private key of the classical key share the server selected, not always the first one (`EcdheByGroup`) | `u_eidolon_keyshare_test.go` |
 | U1b | test only | Regression for the per-connection GREASE value in `signature_algorithms`, drawn from the seed (the substitution is upstream code). Ported from bogdanfinn/utls | `u_eidolon_grease_sigalg_test.go` |
+| U2 | `618a0bb` | With GREASE ECH, accept the 8-byte `encrypted_client_hello` in a HelloRetryRequest (`decode_error` on any other length) instead of aborting; still rejected when no ECH was offered | `u_eidolon_grease_ech_hrr_test.go` |
+| U3 | `9f9b133` | Server ALPS only on the codepoint the client sent and for a protocol offered in its ALPS extension | `u_eidolon_alps_test.go` |
+| U4 | `ba6102e` | Compressed Certificate limited to `maxHandshakeCertificateMsg` before allocating (RFC 8879, Section 5) | `u_eidolon_compressed_cert_limit_test.go` |
+| U5 | `99acdde` | Server CertificateVerify algorithm must be one offered in the ClientHello | `u_eidolon_certverify_sigalg_test.go` |
+| U6 | `18ea062` | Reject server extensions not offered, GREASE, and those outside BoringSSL's set per message (ServerHello, HelloRetryRequest, EncryptedExtensions, CertificateEntry); validate ECH `retry_configs` | `u_eidolon_server_extensions_test.go` |
 | — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
