@@ -165,28 +165,68 @@ func (hs *clientHandshakeStateTLS13) sendClientEncryptedExtensions() error {
 }
 
 func (hs *clientHandshakeStateTLS13) utlsReadServerParameters(encryptedExtensions *encryptedExtensionsMsg) error {
+	c := hs.c
 	hs.c.utls.peerApplicationSettings = encryptedExtensions.utls.applicationSettings
 	hs.c.utls.applicationSettingsCodepoint = encryptedExtensions.utls.applicationSettingsCodepoint
 
 	if hs.c.utls.applicationSettingsCodepoint != 0 {
 		if hs.uconn.vers < VersionTLS13 {
+			c.sendAlert(alertUnsupportedExtension)
 			return errors.New("tls: server sent application settings at invalid version")
 		}
+
+		// [eidolon] ALPS is accepted only on the codepoint the client sent and
+		// for a protocol the client offered ALPS for, as in BoringSSL
+		// (ssl_scan_serverhello_tlsext and ssl_check_serverhello_tlsext).
+		sent, err := clientHelloExtensions(hs.hello)
+		if err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
+		alpsOffer, ok := sent[hs.c.utls.applicationSettingsCodepoint]
+		if !ok {
+			c.sendAlert(alertUnsupportedExtension)
+			return fmt.Errorf("tls: server sent application settings on codepoint %d, which the client did not offer", hs.c.utls.applicationSettingsCodepoint)
+		}
 		if len(hs.uconn.clientProtocol) == 0 {
+			c.sendAlert(alertIllegalParameter)
 			return errors.New("tls: server sent application settings without ALPN")
 		}
-
-		// Check if the ALPN selected by the server exists in the client's list.
-		if alps, ok := hs.uconn.config.ApplicationSettings[hs.serverHello.alpnProtocol]; ok {
-			hs.c.utls.localApplicationSettings = alps
-		} else {
-			// return errors.New("tls: server selected ALPN doesn't match a client ALPS")
-			return nil // ignore if client doesn't have ALPS in use.
-			// TODO: is this a issue or not?
+		alpsProtocols, ok := parseALPSClientHello(alpsOffer)
+		if !ok {
+			c.sendAlert(alertInternalError)
+			return errors.New("tls: internal error: malformed application settings extension in ClientHello")
 		}
+		if !slices.Contains(alpsProtocols, hs.uconn.clientProtocol) {
+			c.sendAlert(alertIllegalParameter)
+			return fmt.Errorf("tls: server sent application settings for %q, which the client did not offer them for", hs.uconn.clientProtocol)
+		}
+
+		// The settings sent back are those configured for the protocol, empty
+		// when there are none.
+		hs.c.utls.localApplicationSettings = hs.uconn.config.ApplicationSettings[hs.uconn.clientProtocol]
 	}
 
 	return nil
+}
+
+// [eidolon] parseALPSClientHello returns the protocols of the
+// application_settings extension data a client sent.
+func parseALPSClientHello(data []byte) ([]string, bool) {
+	s := cryptobyte.String(data)
+	var list cryptobyte.String
+	if !s.ReadUint16LengthPrefixed(&list) || !s.Empty() {
+		return nil, false
+	}
+	var protocols []string
+	for !list.Empty() {
+		var proto cryptobyte.String
+		if !list.ReadUint8LengthPrefixed(&proto) {
+			return nil, false
+		}
+		protocols = append(protocols, string(proto))
+	}
+	return protocols, true
 }
 
 func (c *Conn) makeClientHelloForApplyPreset() (*clientHelloMsg, *keySharePrivateKeys, *echClientContext, error) {

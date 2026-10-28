@@ -664,9 +664,9 @@ func (hs *clientHandshakeStateTLS13) readServerParameters() error {
 
 	// [UTLS SECTION STARTS]
 	if hs.uconn != nil {
+		// [eidolon] utlsReadServerParameters sends the alert for each error.
 		err = hs.utlsReadServerParameters(encryptedExtensions)
 		if err != nil {
-			c.sendAlert(alertUnsupportedExtension)
 			return err
 		}
 	}
