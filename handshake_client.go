@@ -912,6 +912,12 @@ func (hs *clientHandshakeState) serverResumedSession() bool {
 func (hs *clientHandshakeState) processServerHello() (bool, error) {
 	c := hs.c
 
+	// [eidolon] Only offered extensions, none that only exists in TLS 1.3.
+	// See checkServerExtensions.
+	if err := c.checkServerExtensions("ServerHello", hs.serverHello.extensions, hs.hello, true, nil, serverHelloTLS12Forbidden); err != nil {
+		return false, err
+	}
+
 	if err := hs.pickCipherSuite(); err != nil {
 		return false, err
 	}

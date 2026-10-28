@@ -98,6 +98,17 @@ func TestMarshalUnmarshal(t *testing.T) {
 					t.original = nil // [UTLS]
 				}
 
+				// [eidolon] The received extension types are only set by
+				// unmarshal, like ch.extensions.
+				switch t := m.(type) {
+				case *serverHelloMsg:
+					t.extensions = nil
+				case *encryptedExtensionsMsg:
+					t.extensions = nil
+				case *certificateMsgTLS13:
+					t.entryExtensions = nil
+				}
+
 				if !reflect.DeepEqual(m1, m) {
 					t.Errorf("#%d got:%#v want:%#v %x", i, m, m1, marshaled)
 					break

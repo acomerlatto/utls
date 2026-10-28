@@ -208,6 +208,15 @@ func (hs *clientHandshakeStateTLS13) checkServerHelloOrHRR() error {
 		return errors.New("tls: server sent a ServerHello extension forbidden in TLS 1.3")
 	}
 
+	// [eidolon] Only the extensions BoringSSL accepts in a HelloRetryRequest.
+	// A ServerHello is checked by processServerHello, against the ClientHello
+	// the server answered once ECH acceptance is known.
+	if bytes.Equal(hs.serverHello.random, helloRetryRequestRandom) {
+		if err := c.checkServerExtensions("HelloRetryRequest", hs.serverHello.extensions, hs.hello, false, helloRetryRequestExtensions, nil); err != nil {
+			return err
+		}
+	}
+
 	if !bytes.Equal(hs.hello.sessionId, hs.serverHello.sessionId) {
 		c.sendAlert(alertIllegalParameter)
 		return errors.New("tls: server did not echo the legacy session ID")
@@ -535,6 +544,12 @@ func (hs *clientHandshakeStateTLS13) processServerHello() error {
 		return errors.New("tls: server sent two HelloRetryRequest messages")
 	}
 
+	// [eidolon] Only offered extensions BoringSSL accepts in a TLS 1.3
+	// ServerHello. See checkServerExtensions.
+	if err := c.checkServerExtensions("ServerHello", hs.serverHello.extensions, hs.hello, true, serverHelloTLS13Extensions, nil); err != nil {
+		return err
+	}
+
 	if len(hs.serverHello.cookie) != 0 {
 		c.sendAlert(alertUnsupportedExtension)
 		return errors.New("tls: server sent a cookie in a normal ServerHello")
@@ -650,6 +665,18 @@ func (hs *clientHandshakeStateTLS13) readServerParameters() error {
 	if !ok {
 		c.sendAlert(alertUnexpectedMessage)
 		return unexpectedMessageError(encryptedExtensions, msg)
+	}
+
+	// [eidolon] Only offered extensions; see checkServerExtensions.
+	if err := c.checkServerExtensions("EncryptedExtensions", encryptedExtensions.extensions, hs.hello, true, nil, encryptedExtensionsForbidden); err != nil {
+		return err
+	}
+	// [eidolon] retry_configs must be a valid ECHConfigList, also with GREASE
+	// ECH (BoringSSL ext_ech_parse_serverhello). After ECH was accepted the
+	// extension is rejected below.
+	if encryptedExtensions.echRetryConfigs != nil && !c.echAccepted && !isValidECHConfigList(encryptedExtensions.echRetryConfigs) {
+		c.sendAlert(alertDecodeError)
+		return errors.New("tls: server sent a malformed ECHConfigList in retry_configs")
 	}
 
 	if err := checkALPN(hs.hello.alpnProtocols, encryptedExtensions.alpnProtocol, c.quic != nil); err != nil {
@@ -775,6 +802,9 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
 	if len(certMsg.certificate.Certificate) == 0 {
 		c.sendAlert(alertDecodeError)
 		return errors.New("tls: received empty certificates message")
+	}
+	if err := hs.checkCertificateExtensions(certMsg); err != nil { // [eidolon]
+		return err
 	}
 	// [UTLS SECTION BEGINS]
 	if !skipWritingCertToTranscript { // write to transcript only if it is not compressedCert (i.e. if not processed by extension)

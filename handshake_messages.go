@@ -779,6 +779,10 @@ type serverHelloMsg struct {
 	// [uTLS]
 	nextProtoNeg bool
 	nextProtos   []string
+
+	// [eidolon] extensions holds the type of every extension received,
+	// known or not, for the client to check against the ClientHello.
+	extensions []uint16
 }
 
 func (m *serverHelloMsg) marshal() ([]byte, error) {
@@ -941,6 +945,7 @@ func (m *serverHelloMsg) unmarshal(data []byte) bool {
 			return false
 		}
 		seenExts[extension] = true
+		m.extensions = append(m.extensions, extension) // [eidolon]
 
 		switch extension {
 		case extensionStatusRequest:
@@ -1053,6 +1058,10 @@ type encryptedExtensionsMsg struct {
 	serverNameAck           bool
 
 	utls utlsEncryptedExtensionsMsgExtraFields // [uTLS]
+
+	// [eidolon] extensions holds the type of every extension received,
+	// known or not, for the client to check against the ClientHello.
+	extensions []uint16
 }
 
 func (m *encryptedExtensionsMsg) marshal() ([]byte, error) {
@@ -1121,6 +1130,7 @@ func (m *encryptedExtensionsMsg) unmarshal(data []byte) bool {
 			return false
 		}
 		seenExts[extension] = true
+		m.extensions = append(m.extensions, extension) // [eidolon]
 
 		switch extension {
 		case extensionALPN:
@@ -1520,6 +1530,11 @@ type certificateMsgTLS13 struct {
 	certificate  Certificate
 	ocspStapling bool
 	scts         bool
+
+	// [eidolon] entryExtensions holds, for each CertificateEntry, the type of
+	// every extension received, for the client to check against the
+	// ClientHello. It is only set by unmarshal.
+	entryExtensions [][]uint16
 }
 
 func (m *certificateMsgTLS13) marshal() ([]byte, error) {
@@ -1585,7 +1600,7 @@ func (m *certificateMsgTLS13) unmarshal(data []byte) bool {
 	var context cryptobyte.String
 	if !s.Skip(4) || // message type and uint24 length field
 		!s.ReadUint8LengthPrefixed(&context) || !context.Empty() ||
-		!unmarshalCertificate(&s, &m.certificate) ||
+		!unmarshalCertificateEntries(&s, &m.certificate, &m.entryExtensions) || // [eidolon]
 		!s.Empty() {
 		return false
 	}
@@ -1597,6 +1612,12 @@ func (m *certificateMsgTLS13) unmarshal(data []byte) bool {
 }
 
 func unmarshalCertificate(s *cryptobyte.String, certificate *Certificate) bool {
+	return unmarshalCertificateEntries(s, certificate, nil) // [eidolon]
+}
+
+// [eidolon] unmarshalCertificateEntries is unmarshalCertificate that also
+// records the extension types of each entry in entryExts, when not nil.
+func unmarshalCertificateEntries(s *cryptobyte.String, certificate *Certificate, entryExts *[][]uint16) bool {
 	var certList cryptobyte.String
 	if !s.ReadUint24LengthPrefixed(&certList) {
 		return false
@@ -1609,12 +1630,19 @@ func unmarshalCertificate(s *cryptobyte.String, certificate *Certificate) bool {
 			return false
 		}
 		certificate.Certificate = append(certificate.Certificate, cert)
+		if entryExts != nil { // [eidolon]
+			*entryExts = append(*entryExts, nil)
+		}
 		for !extensions.Empty() {
 			var extension uint16
 			var extData cryptobyte.String
 			if !extensions.ReadUint16(&extension) ||
 				!extensions.ReadUint16LengthPrefixed(&extData) {
 				return false
+			}
+			if entryExts != nil { // [eidolon]
+				last := len(*entryExts) - 1
+				(*entryExts)[last] = append((*entryExts)[last], extension)
 			}
 			if len(certificate.Certificate) > 1 {
 				// This library only supports OCSP and SCT for leaf certificates.

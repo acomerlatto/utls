@@ -1,12 +1,16 @@
 package tls
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,6 +30,9 @@ type eidolonRawExtension struct {
 	typ  uint16
 	data []byte
 }
+
+// An extension of type GREASE_PLACEHOLDER in a script is sent with the type
+// of the client's GREASE extension, as if the server echoed it.
 
 type eidolonServerScript struct {
 	// tls12 sends a TLS 1.2 ServerHello carrying shExts and then only waits
@@ -104,10 +111,30 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 	random := make([]byte, 32)
 	rand.Read(random)
 
+	echoGREASE := func(exts []eidolonRawExtension) []eidolonRawExtension {
+		out := slices.Clone(exts)
+		for i := range out {
+			if out[i].typ != GREASE_PLACEHOLDER {
+				continue
+			}
+			for _, typ := range ch.extensions {
+				if isGREASEUint16(typ) {
+					out[i].typ = typ
+				}
+			}
+		}
+		return out
+	}
+	s.hrrExts = echoGREASE(s.hrrExts)
+	s.shExts = echoGREASE(s.shExts)
+	s.eeExts = echoGREASE(s.eeExts)
+	s.certExts = echoGREASE(s.certExts)
+
 	if s.tls12 {
 		c.vers, c.haveVers = VersionTLS12, true
 		c.in.version, c.out.version = c.vers, c.vers
-		sh := eidolonServerHelloBytes(VersionTLS12, random, ch.sessionId,
+		// A TLS 1.2 server does not echo the TLS 1.3 compatibility session ID.
+		sh := eidolonServerHelloBytes(VersionTLS12, random, nil,
 			TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, s.shExts)
 		if _, err := c.writeHandshakeRecord(eidolonRawMessage(sh), nil); err != nil {
 			return err
@@ -115,7 +142,7 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 		// A client that accepts the ServerHello waits for the Certificate.
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, err := c.readHandshake(nil)
-		if err == nil {
+		if err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 			err = errors.New("scripted server: client did not abort after the TLS 1.2 ServerHello")
 		}
 		return err
@@ -182,10 +209,9 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 	handshakeSecret := tls13.NewEarlySecret(suite.hash.New, nil).HandshakeSecret(sharedKey)
 	c.setWriteTrafficSecret(suite, QUICEncryptionLevelHandshake,
 		handshakeSecret.ServerHandshakeTrafficSecret(transcript))
-	if err := c.setReadTrafficSecret(suite, QUICEncryptionLevelHandshake,
-		handshakeSecret.ClientHandshakeTrafficSecret(transcript), false); err != nil {
-		return err
-	}
+	// The read key is set once the client answered: a client that rejects the
+	// ServerHello sends its alert in plaintext.
+	clientSecret := handshakeSecret.ClientHandshakeTrafficSecret(transcript)
 
 	var ee cryptobyte.Builder
 	ee.AddUint8(typeEncryptedExtensions)
@@ -254,6 +280,13 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 		return err
 	}
 
+	if err := eidolonSkipPlaintextRecords(c); err != nil {
+		return err
+	}
+	if err := c.setReadTrafficSecret(suite, QUICEncryptionLevelHandshake, clientSecret, false); err != nil {
+		return err
+	}
+
 	// Read the client's flight up to its Finished; a client EncryptedExtensions
 	// (ALPS) may come first.
 	for {
@@ -266,6 +299,39 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 		}
 	}
 }
+
+// eidolonSkipPlaintextRecords reads the client's plaintext records before its
+// encrypted flight: it skips the compatibility ChangeCipherSpec and returns
+// a plaintext alert as an error. The first other record is pushed back.
+func eidolonSkipPlaintextRecords(c *Conn) error {
+	for {
+		hdr := make([]byte, recordHeaderLen)
+		if _, err := io.ReadFull(c.conn, hdr); err != nil {
+			return err
+		}
+		body := make([]byte, int(hdr[3])<<8|int(hdr[4]))
+		if _, err := io.ReadFull(c.conn, body); err != nil {
+			return err
+		}
+		switch recordType(hdr[0]) {
+		case recordTypeChangeCipherSpec:
+			continue
+		case recordTypeAlert:
+			if len(body) == 2 {
+				return &net.OpError{Op: "remote error", Err: alert(body[1])}
+			}
+		}
+		c.conn = &eidolonPrefixConn{Conn: c.conn, r: io.MultiReader(bytes.NewReader(append(hdr, body...)), c.conn)}
+		return nil
+	}
+}
+
+type eidolonPrefixConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *eidolonPrefixConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // eidolonScriptedHandshake runs a UConn built from spec against the scripted
 // server and returns the client error and the server error. The client side

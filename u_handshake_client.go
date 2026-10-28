@@ -687,3 +687,183 @@ func clientHelloExtensions(hello *clientHelloMsg) (map[uint16][]byte, error) {
 	}
 	return exts, nil
 }
+
+// [eidolon] Server extensions are checked against the ClientHello the server
+// answered, as BoringSSL does (ssl_scan_serverhello_tlsext and
+// ssl_parse_extensions with ignore_unknown=false): an extension the client
+// did not offer aborts the handshake with unsupported_extension (RFC 8446,
+// Section 4.2), and so does a GREASE value, which a client never offers as a
+// real extension (RFC 8701, Section 3.1).
+
+var (
+	// BoringSSL accepts only these in a HelloRetryRequest
+	// (do_read_hello_retry_request). The ECH extension is checked by
+	// processHelloRetryRequest.
+	helloRetryRequestExtensions = map[uint16]bool{
+		extensionCookie:               true,
+		extensionKeyShare:             true,
+		extensionSupportedVersions:    true,
+		extensionEncryptedClientHello: true,
+	}
+	// BoringSSL accepts only these in a TLS 1.3 ServerHello
+	// (do_read_server_hello). The others belong in EncryptedExtensions.
+	serverHelloTLS13Extensions = map[uint16]bool{
+		extensionKeyShare:          true,
+		extensionPreSharedKey:      true,
+		extensionSupportedVersions: true,
+	}
+	// Extensions BoringSSL rejects in a TLS 1.3 EncryptedExtensions even when
+	// offered, with the alert its parse_serverhello callback sends.
+	encryptedExtensionsForbidden = map[uint16]alert{
+		extensionStatusRequest:           alertDecodeError,
+		extensionSupportedPoints:         alertDecodeError,
+		extensionSCT:                     alertDecodeError,
+		extensionExtendedMasterSecret:    alertDecodeError,
+		extensionSessionTicket:           alertDecodeError,
+		extensionNextProtoNeg:            alertDecodeError,
+		utlsExtensionCompressCertificate: alertDecodeError,
+		extensionRenegotiationInfo:       alertIllegalParameter,
+		extensionSignatureAlgorithms:     alertUnsupportedExtension,
+		extensionSignatureAlgorithmsCert: alertUnsupportedExtension,
+		utlsExtensionPadding:             alertUnsupportedExtension,
+		extensionDelegatedCredentials:    alertUnsupportedExtension,
+		extensionPreSharedKey:            alertUnsupportedExtension,
+		extensionSupportedVersions:       alertUnsupportedExtension,
+		extensionCookie:                  alertUnsupportedExtension,
+		extensionPSKModes:                alertUnsupportedExtension,
+		extensionCertificateAuthorities:  alertUnsupportedExtension,
+		extensionKeyShare:                alertUnsupportedExtension,
+	}
+	// Extensions BoringSSL rejects in a TLS 1.2 ServerHello even when
+	// offered: those that only exist in TLS 1.3.
+	serverHelloTLS12Forbidden = map[uint16]alert{
+		extensionSignatureAlgorithms:        alertUnsupportedExtension,
+		extensionSignatureAlgorithmsCert:    alertUnsupportedExtension,
+		utlsExtensionPadding:                alertUnsupportedExtension,
+		extensionDelegatedCredentials:       alertUnsupportedExtension,
+		extensionPreSharedKey:               alertUnsupportedExtension,
+		extensionEarlyData:                  alertUnsupportedExtension,
+		extensionSupportedVersions:          alertUnsupportedExtension,
+		extensionCookie:                     alertUnsupportedExtension,
+		extensionPSKModes:                   alertUnsupportedExtension,
+		extensionCertificateAuthorities:     alertUnsupportedExtension,
+		extensionKeyShare:                   alertUnsupportedExtension,
+		extensionEncryptedClientHello:       alertUnsupportedExtension,
+		utlsExtensionApplicationSettings:    alertUnsupportedExtension,
+		utlsExtensionApplicationSettingsNew: alertUnsupportedExtension,
+		utlsExtensionTrustAnchors:           alertUnsupportedExtension,
+		utlsExtensionCompressCertificate:    alertDecodeError,
+	}
+)
+
+// offeredExtensions returns the extension types hello carried.
+func offeredExtensions(hello *clientHelloMsg) (map[uint16]bool, error) {
+	exts, err := clientHelloExtensions(hello)
+	if err != nil {
+		return nil, err
+	}
+	offered := make(map[uint16]bool, len(exts))
+	for typ := range exts {
+		offered[typ] = true
+	}
+	// renegotiation_info also answers the SCSV (RFC 5746, Section 3.4).
+	if slices.Contains(hello.cipherSuites, scsvRenegotiation) {
+		offered[extensionRenegotiationInfo] = true
+	}
+	return offered, nil
+}
+
+// checkServerExtensions aborts the handshake if received holds a GREASE
+// value, a type hello did not offer (unless offer is false), a type outside
+// allowed (when not nil) or a type in forbidden.
+func (c *Conn) checkServerExtensions(msg string, received []uint16, hello *clientHelloMsg, offer bool, allowed map[uint16]bool, forbidden map[uint16]alert) error {
+	var offered map[uint16]bool
+	if offer {
+		var err error
+		if offered, err = offeredExtensions(hello); err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
+	}
+	for _, typ := range received {
+		if isGREASEUint16(typ) || (offer && !offered[typ]) || (allowed != nil && !allowed[typ]) {
+			c.sendAlert(alertUnsupportedExtension)
+			return fmt.Errorf("tls: server sent unexpected extension %d in %s", typ, msg)
+		}
+		if a, ok := forbidden[typ]; ok {
+			c.sendAlert(a)
+			return fmt.Errorf("tls: server sent extension %d, not allowed in %s", typ, msg)
+		}
+	}
+	return nil
+}
+
+// checkCertificateExtensions checks the extensions of each CertificateEntry
+// as BoringSSL tls13_process_certificate does: only status_request, SCT and,
+// in the first entry, trust_anchors, each only if offered, and no duplicates.
+func (hs *clientHandshakeStateTLS13) checkCertificateExtensions(certMsg *certificateMsgTLS13) error {
+	c := hs.c
+	offered, err := offeredExtensions(hs.hello)
+	if err != nil {
+		c.sendAlert(alertInternalError)
+		return err
+	}
+	for i, exts := range certMsg.entryExtensions {
+		seen := make(map[uint16]bool, len(exts))
+		for _, typ := range exts {
+			allowed := typ == extensionStatusRequest || typ == extensionSCT ||
+				(typ == utlsExtensionTrustAnchors && i == 0)
+			if !allowed || !offered[typ] {
+				c.sendAlert(alertUnsupportedExtension)
+				return fmt.Errorf("tls: server sent unexpected extension %d in certificate entry %d", typ, i)
+			}
+			if seen[typ] {
+				c.sendAlert(alertIllegalParameter)
+				return fmt.Errorf("tls: server sent duplicate extension %d in certificate entry %d", typ, i)
+			}
+			seen[typ] = true
+		}
+	}
+	return nil
+}
+
+// isValidECHConfigList checks the syntax of an ECHConfigList as BoringSSL
+// ssl_is_valid_ech_config_list does: a non-empty list of ECHConfigs, each
+// consumed exactly, with the contents of the known version well formed.
+func isValidECHConfigList(data []byte) bool {
+	s := cryptobyte.String(data)
+	var list cryptobyte.String
+	if !s.ReadUint16LengthPrefixed(&list) || list.Empty() || !s.Empty() {
+		return false
+	}
+	for !list.Empty() {
+		var version uint16
+		var contents cryptobyte.String
+		if !list.ReadUint16(&version) || !list.ReadUint16LengthPrefixed(&contents) {
+			return false
+		}
+		if version != extensionEncryptedClientHello {
+			continue
+		}
+		var configID, maxNameLength uint8
+		var kemID uint16
+		var publicKey, cipherSuites, publicName, extensions cryptobyte.String
+		if !contents.ReadUint8(&configID) ||
+			!contents.ReadUint16(&kemID) ||
+			!contents.ReadUint16LengthPrefixed(&publicKey) || publicKey.Empty() ||
+			!contents.ReadUint16LengthPrefixed(&cipherSuites) || cipherSuites.Empty() || len(cipherSuites)%4 != 0 ||
+			!contents.ReadUint8(&maxNameLength) ||
+			!contents.ReadUint8LengthPrefixed(&publicName) || publicName.Empty() ||
+			!contents.ReadUint16LengthPrefixed(&extensions) || !contents.Empty() {
+			return false
+		}
+		for !extensions.Empty() {
+			var typ uint16
+			var body cryptobyte.String
+			if !extensions.ReadUint16(&typ) || !extensions.ReadUint16LengthPrefixed(&body) {
+				return false
+			}
+		}
+	}
+	return true
+}
