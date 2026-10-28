@@ -57,6 +57,15 @@ func (hs *clientHandshakeStateTLS13) decompressCert(m utlsCompressedCertificateM
 		c            = hs.c
 	)
 
+	// [eidolon] The decompressed message has the same size limit as an
+	// uncompressed Certificate, checked before allocating it (RFC 8879,
+	// Section 5). BoringSSL sends illegal_parameter
+	// (SSL_R_UNCOMPRESSED_CERT_TOO_LARGE in tls13_process_certificate).
+	if m.uncompressedLength > maxHandshakeCertificateMsg {
+		c.sendAlert(alertIllegalParameter)
+		return nil, fmt.Errorf("uncompressed length (%d) exceeds maximum of %d bytes", m.uncompressedLength, maxHandshakeCertificateMsg)
+	}
+
 	// Check to see if the peer responded with an algorithm we advertised.
 	supportedAlg := false
 	for _, alg := range hs.uconn.certCompressionAlgs {
