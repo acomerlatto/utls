@@ -102,6 +102,13 @@ type clientHelloMsg struct {
 	// extensions are only populated on the server-side of a handshake
 	extensions []uint16
 
+	// [eidolon] alpsCodepoint and alpsProtocols are the ALPS extension of
+	// the ClientHello (application_settings), read on the server side: its
+	// codepoint, 17613 when both are present, and the protocols it offers
+	// settings for.
+	alpsCodepoint uint16
+	alpsProtocols []string
+
 	// [uTLS]
 	nextProtoNeg bool
 }
@@ -616,6 +623,23 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 				}
 				m.alpnProtocols = append(m.alpnProtocols, string(proto))
 			}
+		case utlsExtensionApplicationSettings, utlsExtensionApplicationSettingsNew:
+			// [eidolon] ALPS, with the protocol list of ALPN.
+			var protoList cryptobyte.String
+			if !extData.ReadUint16LengthPrefixed(&protoList) || protoList.Empty() {
+				return false
+			}
+			var protos []string
+			for !protoList.Empty() {
+				var proto cryptobyte.String
+				if !protoList.ReadUint8LengthPrefixed(&proto) || proto.Empty() {
+					return false
+				}
+				protos = append(protos, string(proto))
+			}
+			if m.alpsCodepoint != utlsExtensionApplicationSettingsNew {
+				m.alpsCodepoint, m.alpsProtocols = extension, protos
+			}
 		case extensionSCT:
 			// RFC 6962, Section 3.3.1
 			m.scts = true
@@ -1100,6 +1124,12 @@ func (m *encryptedExtensionsMsg) marshal() ([]byte, error) {
 			if m.serverNameAck {
 				b.AddUint16(extensionServerName)
 				b.AddUint16(0) // empty extension_data
+			}
+			if m.utls.applicationSettingsCodepoint != 0 { // [eidolon] server ALPS
+				b.AddUint16(m.utls.applicationSettingsCodepoint)
+				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+					b.AddBytes(m.utls.applicationSettings)
+				})
 			}
 		})
 	})

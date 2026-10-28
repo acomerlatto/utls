@@ -93,6 +93,9 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 	if _, err := c.flush(); err != nil {
 		return err
 	}
+	if err := hs.readClientEncryptedExtensions(); err != nil { // [eidolon]
+		return err
+	}
 	if err := hs.readClientCertificate(); err != nil {
 		return err
 	}
@@ -794,6 +797,16 @@ func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 		encryptedExtensions.serverNameAck = true
 	}
 
+	// [eidolon] ALPS, when the client offers it for the negotiated
+	// protocol and Config.ApplicationSettings has settings for it, as
+	// BoringSSL's ssl_negotiate_alps.
+	if settings, ok := c.config.ApplicationSettings[c.clientProtocol]; ok &&
+		slices.Contains(hs.clientHello.alpsProtocols, c.clientProtocol) {
+		c.utls.applicationSettingsCodepoint = hs.clientHello.alpsCodepoint
+		encryptedExtensions.utls.applicationSettingsCodepoint = hs.clientHello.alpsCodepoint
+		encryptedExtensions.utls.applicationSettings = settings
+	}
+
 	// If client sent ECH extension, but we didn't accept it,
 	// send retry configs, if available.
 	echKeys := hs.c.config.EncryptedClientHelloKeys
@@ -930,12 +943,40 @@ func (hs *serverHandshakeStateTLS13) sendServerFinished() error {
 	// If we did not request client certificates, at this point we can
 	// precompute the client finished and roll the transcript forward to send
 	// session tickets in our first flight.
-	if !hs.requestClientCert() {
+	// [eidolon] With ALPS, the client EncryptedExtensions come first.
+	if !hs.requestClientCert() && c.utls.applicationSettingsCodepoint == 0 {
 		if err := hs.sendSessionTickets(); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+// [eidolon] readClientEncryptedExtensions reads the client
+// EncryptedExtensions that ALPS requires, with the client settings on the
+// codepoint the server answered, as BoringSSL's
+// ssl_parse_client_encrypted_extensions; without ALPS, the client sends
+// none.
+func (hs *serverHandshakeStateTLS13) readClientEncryptedExtensions() error {
+	c := hs.c
+	if c.utls.applicationSettingsCodepoint == 0 {
+		return nil
+	}
+	msg, err := c.readHandshake(hs.transcript)
+	if err != nil {
+		return err
+	}
+	ee, ok := msg.(*utlsClientEncryptedExtensionsMsg)
+	if !ok {
+		c.sendAlert(alertUnexpectedMessage)
+		return unexpectedMessageError(ee, msg)
+	}
+	if ee.applicationSettingsCodepoint != c.utls.applicationSettingsCodepoint {
+		c.sendAlert(alertMissingExtension)
+		return errors.New("tls: client EncryptedExtensions without application settings")
+	}
+	c.utls.peerApplicationSettings = ee.applicationSettings
 	return nil
 }
 
@@ -1039,6 +1080,9 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
 				c.sendAlert(alertBadCertificate)
 				return err
 			}
+		}
+		if c.utls.applicationSettingsCodepoint != 0 {
+			return hs.sendSessionTickets() // [eidolon] held for ALPS
 		}
 		return nil
 	}
