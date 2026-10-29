@@ -28,6 +28,7 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 | U5 | `99acdde` | Server CertificateVerify algorithm must be one offered in the ClientHello | `u_eidolon_certverify_sigalg_test.go` |
 | U6 | `18ea062` | Reject server extensions not offered, GREASE, and those outside BoringSSL's set per message (ServerHello, HelloRetryRequest, EncryptedExtensions, CertificateEntry); validate ECH `retry_configs` | `u_eidolon_server_extensions_test.go` |
 | U7 | `52c16a1` | Server-side ALPS: negotiated on the codepoint of the ClientHello when the client offers it for the negotiated protocol and `Config.ApplicationSettings` has settings for it; the client EncryptedExtensions are then required, and the session ticket waits for them | `u_eidolon_server_alps_test.go` |
+| U8 | `94027cd` | An ECH rejection is authenticated for the public name of the ECHConfig, not for `Config.ServerName` or `InsecureServerNameToVerify` (RFC 9849, Section 6.1.7), as Go's crypto/tls and BoringSSL do | `u_eidolon_ech_rejection_test.go` |
 | — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
