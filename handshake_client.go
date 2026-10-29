@@ -319,7 +319,7 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 		return unexpectedMessageError(serverHello, msg)
 	}
 
-	if err := c.pickTLSVersion(serverHello); err != nil {
+	if err := c.pickTLSVersion(serverHello, false); err != nil {
 		return err
 	}
 
@@ -545,13 +545,25 @@ func (c *Conn) loadSession(hello *clientHelloMsg) (
 	return
 }
 
-func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg) error {
+// pickTLSVersion sets the version of the connection from serverHello.
+//
+// [eidolon] offersTLS12 reports a ClientHello of a spec that offered TLS
+// 1.2, which is then accepted with Config.MinVersion unset, as BoringSSL
+// accepts it. With an ECHConfigList, Config.supportedVersions leaves TLS
+// 1.2 out, for Go's ClientHelloInner, and uTLS refused the version that
+// ClientHelloOuter offered; a TLS 1.2 ServerHello rejects ECH: the
+// handshake runs for the public name and fails with an ECHRejectionError
+// (RFC 9849, Section 6.1.6). Without ECH, the version is accepted anyway.
+func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg, offersTLS12 bool) error {
 	peerVersion := serverHello.vers
 	if serverHello.supportedVersion != 0 {
 		peerVersion = serverHello.supportedVersion
 	}
 
 	vers, ok := c.config.mutualVersion(roleClient, c.quic != nil, []uint16{peerVersion})
+	if offersTLS12 && peerVersion == VersionTLS12 && c.config.MinVersion == 0 {
+		vers, ok = VersionTLS12, true
+	}
 	if !ok {
 		c.sendAlert(alertProtocolVersion)
 		return fmt.Errorf("tls: server selected unsupported protocol version %x", peerVersion)
@@ -653,6 +665,13 @@ func (hs *clientHandshakeState) handshake() error {
 		if err := hs.readFinished(c.serverFinished[:]); err != nil {
 			return err
 		}
+	}
+	// [eidolon] With ECH offered, a TLS 1.2 handshake is a rejection,
+	// authenticated for the public name; as BoringSSL, its session is not
+	// saved (only UConn offers TLS 1.2 with ECH, pickTLSVersion).
+	if c.config.EncryptedClientHelloConfigList != nil {
+		c.sendAlert(alertECHRequired)
+		return &ECHRejectionError{}
 	}
 	if err := hs.saveSessionTicket(); err != nil {
 		return err
@@ -760,7 +779,11 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		certRequested = true
 
 		cri := certificateRequestInfoFromMsg(hs.ctx, c.vers, certReq)
-		if chainToSend, err = c.getClientCertificate(cri); err != nil {
+		if c.config.EncryptedClientHelloConfigList != nil {
+			// [eidolon] ECH rejected: no certificate for a server
+			// authenticated only for the public name, as in TLS 1.3.
+			chainToSend = new(Certificate)
+		} else if chainToSend, err = c.getClientCertificate(cri); err != nil {
 			c.sendAlert(alertInternalError)
 			return err
 		}

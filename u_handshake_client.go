@@ -573,7 +573,7 @@ func (c *UConn) clientHandshake(ctx context.Context) (err error) {
 		return unexpectedMessageError(serverHello, msg)
 	}
 
-	if err := c.pickTLSVersion(serverHello); err != nil {
+	if err := c.pickTLSVersion(serverHello, slices.Contains(hello.supportedVersions, VersionTLS12)); err != nil {
 		return err
 	}
 

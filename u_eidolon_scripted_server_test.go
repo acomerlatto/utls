@@ -38,6 +38,8 @@ type eidolonServerScript struct {
 	// tls12 sends a TLS 1.2 ServerHello carrying shExts and then only waits
 	// for the client's reaction.
 	tls12 bool
+	// tls12Version replaces TLS 1.2 in the ServerHello of tls12.
+	tls12Version uint16
 	// hrrExts, when not nil, makes the server send a HelloRetryRequest with
 	// supported_versions, a cookie and these extensions.
 	hrrExts  []eidolonRawExtension
@@ -132,9 +134,12 @@ func eidolonRunScriptedServer(conn net.Conn, s eidolonServerScript) error {
 
 	if s.tls12 {
 		c.vers, c.haveVers = VersionTLS12, true
+		if s.tls12Version != 0 {
+			c.vers = s.tls12Version
+		}
 		c.in.version, c.out.version = c.vers, c.vers
 		// A TLS 1.2 server does not echo the TLS 1.3 compatibility session ID.
-		sh := eidolonServerHelloBytes(VersionTLS12, random, nil,
+		sh := eidolonServerHelloBytes(c.vers, random, nil,
 			TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, s.shExts)
 		if _, err := c.writeHandshakeRecord(eidolonRawMessage(sh), nil); err != nil {
 			return err
