@@ -6,6 +6,7 @@ package tls
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/hpke"
 	"errors"
 	"fmt"
@@ -156,6 +157,14 @@ func parseECHConfigList(data []byte) ([]echConfig, error) {
 	return configs, nil
 }
 
+// pickECHConfig returns the first ECHConfig BoringSSL would select
+// (ssl_select_ech_config), with its HPKE parameters, or nil.
+//
+// [eidolon] As BoringSSL: only DHKEM(X25519, HKDF-SHA256) and HKDF-SHA256,
+// and the first of AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, except
+// that ChaCha20-Poly1305 is preferred without AES hardware. uTLS took the
+// first ECHConfig and suite with any KEM, KDF and AEAD of crypto/hpke, so
+// a list Chrome reads differently sent another config_id or suite.
 func pickECHConfig(list []echConfig) (*echConfig, hpke.PublicKey, hpke.KDF, hpke.AEAD) {
 	for _, ec := range list {
 		if !validDNSName(string(ec.PublicName)) {
@@ -170,38 +179,37 @@ func pickECHConfig(list []echConfig) (*echConfig, hpke.PublicKey, hpke.KDF, hpke
 				unsupportedExt = true
 			}
 		}
-		if unsupportedExt {
+		if unsupportedExt || ec.KemID != defaultHpkeKem {
 			continue
 		}
-		kem, err := hpke.NewKEM(ec.KemID)
-		if err != nil {
-			continue
-		}
-		pub, err := kem.NewPublicKey(ec.PublicKey)
+		pub, err := hpke.DHKEM(ecdh.X25519()).NewPublicKey(ec.PublicKey)
 		if err != nil {
 			// This is an error in the config, but killing the connection feels
 			// excessive.
 			continue
 		}
+		var aead hpke.AEAD
 		for _, cs := range ec.SymmetricCipherSuite {
-			// All of the supported AEADs and KDFs are fine, rather than
-			// imposing some sort of preference here, we just pick the first
-			// valid suite.
-			kdf, err := hpke.NewKDF(cs.KDFID)
-			if err != nil {
+			if cs.KDFID != defaultHpkeKdf {
 				continue
 			}
-			// 0xFFFF is an export-only AEAD that cannot seal/open, making
-			// it an invalid choice for encrypting ClientHelloInner.
-			if cs.AEADID == 0xFFFF {
-				continue
+			var a hpke.AEAD
+			switch cs.AEADID {
+			case hpke.AES128GCM().ID():
+				a = hpke.AES128GCM()
+			case hpke.AES256GCM().ID():
+				a = hpke.AES256GCM()
+			case hpke.ChaCha20Poly1305().ID():
+				a = hpke.ChaCha20Poly1305()
 			}
-			aead, err := hpke.NewAEAD(cs.AEADID)
-			if err != nil {
-				continue
+			if aead == nil || !hasAESGCMHardwareSupport && cs.AEADID == hpke.ChaCha20Poly1305().ID() {
+				aead = a
 			}
-			return &ec, pub, kdf, aead
 		}
+		if aead == nil {
+			continue
+		}
+		return &ec, pub, hpke.HKDFSHA256(), aead
 	}
 	return nil, nil, nil, nil
 }
