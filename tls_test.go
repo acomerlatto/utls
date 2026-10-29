@@ -2672,6 +2672,14 @@ func testECHSpec(t *testing.T, spec *ClientHelloSpec, expectSuccess bool) {
 	clientConfig.RootCAs.AddCert(publicCert)
 	clientConfig.EncryptedClientHelloConfigList = echConfigList
 	clientConfig.ClientSessionCache = NewLRUClientSessionCache(2)
+	if spec != nil {
+		// [eidolon] ClientHelloInner now has the psk_key_exchange_modes of
+		// the spec, so the server sends tickets; a later handshake would
+		// load one into a spec without pre_shared_key, which uTLS refuses
+		// with a panic (sessionController.assertCanSkip), and a custom ECH
+		// ClientHello does not resume.
+		clientConfig.ClientSessionCache = nil
+	}
 	serverConfig.InsecureSkipVerify = false
 	serverConfig.Time = nil
 	serverConfig.MinVersion = VersionTLS13

@@ -499,10 +499,21 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 		encapKey = ech.encapsulatedKey
 	}
 
-	encodedInner, err := encodeInnerClientHelloReorderOuterExts(inner, int(ech.config.MaxNameLength), uconn.extensionsList())
+	// [eidolon] ClientHelloInner is built from the extensions of
+	// ClientHelloOuter, as BoringSSL builds it, and replaces inner, which
+	// keeps its random.
+	if err := uconn.MarshalClientHelloNoECH(); err != nil {
+		return err
+	}
+	innerMsg, encodedInner, err := echInner(uconn.HandshakeState.Hello.Raw, inner.random, hostnameInSNI(uconn.config.ServerName), int(ech.config.MaxNameLength))
 	if err != nil {
 		return err
 	}
+	built := &clientHelloMsg{}
+	if !built.unmarshal(innerMsg) {
+		return errors.New("tls: internal error: malformed ClientHelloInner")
+	}
+	*inner = *built
 	ech.encodedInner = bytes.Clone(encodedInner)
 
 	encryptedLen := len(encodedInner) + 16
@@ -569,12 +580,8 @@ func (uconn *UConn) MarshalClientHello() error {
 			return err
 		}
 
-		// copy compressed extensions to the ClientHelloInner
-		inner.keyShares = KeyShares(uconn.HandshakeState.Hello.KeyShares).ToPrivate()
-		inner.supportedSignatureAlgorithms = uconn.HandshakeState.Hello.SupportedSignatureAlgorithms
-		inner.sessionId = uconn.HandshakeState.Hello.SessionId
-		inner.supportedCurves = uconn.HandshakeState.Hello.SupportedCurves
-
+		// [eidolon] computeAndUpdateOuterECHExtension replaces inner, but
+		// for its random, with ClientHelloInner built from the outer.
 		ech.innerHello = inner
 
 		if err := uconn.computeAndUpdateOuterECHExtension(inner, ech, true); err != nil {
