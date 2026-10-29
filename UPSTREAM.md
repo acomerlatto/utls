@@ -29,6 +29,8 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 | U6 | `18ea062` | Reject server extensions not offered, GREASE, and those outside BoringSSL's set per message (ServerHello, HelloRetryRequest, EncryptedExtensions, CertificateEntry); validate ECH `retry_configs` | `u_eidolon_server_extensions_test.go` |
 | U7 | `52c16a1` | Server-side ALPS: negotiated on the codepoint of the ClientHello when the client offers it for the negotiated protocol and `Config.ApplicationSettings` has settings for it; the client EncryptedExtensions are then required, and the session ticket waits for them | `u_eidolon_server_alps_test.go` |
 | U8 | `94027cd` | An ECH rejection is authenticated for the public name of the ECHConfig, not for `Config.ServerName` or `InsecureServerNameToVerify` (RFC 9849, Section 6.1.7), as Go's crypto/tls and BoringSSL do | `u_eidolon_ech_rejection_test.go` |
+| U9 | `01a1501` | ClientHelloInner built from the marshaled ClientHelloOuter as BoringSSL builds it (`ssl_encrypt_client_hello`): GREASE and TLS 1.3 cipher suites, the real server name, supported_versions from TLS 1.3, no TLS 1.2 extensions, padding or PSK, and the extensions BoringSSL compresses last, named by `ech_outer_extensions`; uTLS used Go's `makeClientHello` | `u_eidolon_ech_inner_test.go` |
+| U10 | `059751b` | After a HelloRetryRequest that accepts ECH, the outer key_share carries the new key share, which ClientHelloInner compresses | `u_eidolon_ech_hrr_test.go` |
 | — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
