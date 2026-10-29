@@ -67,7 +67,8 @@ func eidolonSelfSigned(t *testing.T, name string) (Certificate, *x509.Certificat
 // against Config.ServerName, the name of the ClientHelloInner: a certificate
 // for the public name failed and one for the inner name authenticated the
 // rejection. InsecureServerNameToVerify, which replaces the inner name,
-// does not apply either.
+// does not apply either. The server negotiates ALPN, which the client
+// checks against the outer.
 func TestEidolonECHRejectionVerifiesPublicName(t *testing.T) {
 	publicCert, publicX509 := eidolonSelfSigned(t, "public.example")
 	secretCert, secretX509 := eidolonSelfSigned(t, "secret.example")
@@ -115,6 +116,7 @@ func TestEidolonECHRejectionVerifiesPublicName(t *testing.T) {
 				cfg.RootCAs.AddCert(secretX509)
 				srv := &Config{
 					Certificates:             []Certificate{tt.serverCert},
+					NextProtos:               []string{"h2"},
 					MinVersion:               VersionTLS13,
 					EncryptedClientHelloKeys: []EncryptedClientHelloKey{{Config: serverConfig, PrivateKey: serverKey.Bytes(), SendAsRetry: true}},
 				}

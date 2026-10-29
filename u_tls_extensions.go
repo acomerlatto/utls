@@ -613,12 +613,11 @@ type ALPNExtension struct {
 }
 
 func (e *ALPNExtension) writeToUConn(uc *UConn) error {
-	// Do not overwrite NextProtos in config if Encrypted Client Hello is used.
-	// Config ALPN will be written to inner Hello
-	if uc.config.EncryptedClientHelloConfigList == nil {
-		uc.config.NextProtos = e.AlpnProtocols
-		uc.HandshakeState.Hello.AlpnProtocols = e.AlpnProtocols
-	}
+	// [eidolon] Also with ECH: ClientHelloInner copies the extension of
+	// the outer, and after a rejection the handshake checks the ALPN of
+	// the server against the outer.
+	uc.config.NextProtos = e.AlpnProtocols
+	uc.HandshakeState.Hello.AlpnProtocols = e.AlpnProtocols
 	return nil
 }
 
