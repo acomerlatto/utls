@@ -123,6 +123,13 @@ func parseECHConfig(enc []byte) (skip bool, ec echConfig, err error) {
 // slice of parsed ECHConfigs, in the same order they were parsed, or an error
 // if the list is malformed.
 func parseECHConfigList(data []byte) ([]echConfig, error) {
+	// [eidolon] The list must have the syntax BoringSSL requires before it
+	// is read: below, each ECHConfig was read past its contents, which may
+	// hold trailing bytes, and its length in 16 bits wrapped around and
+	// looped over the same ECHConfig forever.
+	if !isValidECHConfigList(data) {
+		return nil, errMalformedECHConfigList
+	}
 	s := cryptobyte.String(data)
 	var length uint16
 	if !s.ReadUint16(&length) {
