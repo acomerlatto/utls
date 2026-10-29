@@ -217,6 +217,9 @@ type echClientContext struct {
 	encapsulatedKey []byte
 	//[uTLS] SECTION START
 	encodedInner []byte
+	// [eidolon] outerExt is the encrypted_client_hello extension of the
+	// first ClientHelloOuter.
+	outerExt []byte
 	//[uTLS] SECTION END
 	innerHello      *clientHelloMsg
 	innerTranscript hash.Hash

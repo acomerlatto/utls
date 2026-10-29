@@ -522,22 +522,7 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 		return err
 	}
 
-	echExtIdx := slices.IndexFunc(uconn.Extensions, func(ext TLSExtension) bool {
-		_, ok := ext.(EncryptedClientHelloExtension)
-		return ok
-	})
-	if echExtIdx < 0 {
-		return fmt.Errorf("extension satisfying EncryptedClientHelloExtension not present")
-	}
-	oldExt := uconn.Extensions[echExtIdx]
-	defer func() { uconn.Extensions[echExtIdx] = oldExt }()
-
-	uconn.Extensions[echExtIdx] = &GenericExtension{
-		Id:   extensionEncryptedClientHello,
-		Data: outerECHExt,
-	}
-
-	if err := uconn.MarshalClientHelloNoECH(); err != nil {
+	if err := uconn.marshalClientHelloWithECH(outerECHExt); err != nil {
 		return err
 	}
 
@@ -551,17 +536,28 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 	if err != nil {
 		return err
 	}
+	// [eidolon] Kept for a second ClientHello after ECH is rejected.
+	ech.outerExt = outerECHExt
+	return uconn.marshalClientHelloWithECH(outerECHExt)
+}
+
+// marshalClientHelloWithECH marshals the ClientHello with ech as the data
+// of its encrypted_client_hello extension, which it then restores.
+func (uconn *UConn) marshalClientHelloWithECH(ech []byte) error {
+	echExtIdx := slices.IndexFunc(uconn.Extensions, func(ext TLSExtension) bool {
+		_, ok := ext.(EncryptedClientHelloExtension)
+		return ok
+	})
+	if echExtIdx < 0 {
+		return fmt.Errorf("extension satisfying EncryptedClientHelloExtension not present")
+	}
+	oldExt := uconn.Extensions[echExtIdx]
+	defer func() { uconn.Extensions[echExtIdx] = oldExt }()
 	uconn.Extensions[echExtIdx] = &GenericExtension{
 		Id:   extensionEncryptedClientHello,
-		Data: outerECHExt,
+		Data: ech,
 	}
-
-	if err := uconn.MarshalClientHelloNoECH(); err != nil {
-		return err
-	}
-
-	return nil
-
+	return uconn.MarshalClientHelloNoECH()
 }
 
 func (uconn *UConn) MarshalClientHello() error {

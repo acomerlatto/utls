@@ -455,7 +455,15 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 							hs.uconn.Extensions[cookieIndex:]...)...)
 				}
 			}
-			if err := hs.uconn.MarshalClientHelloNoECH(); err != nil {
+			marshal := hs.uconn.MarshalClientHelloNoECH
+			if hs.echContext != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
+				// [eidolon] With ECH rejected, the second ClientHelloOuter
+				// carries the encrypted_client_hello extension of the
+				// first, as BoringSSL sends it, not the extension of the
+				// spec. With ECH accepted, it is encrypted again below.
+				marshal = func() error { return hs.uconn.marshalClientHelloWithECH(hs.echContext.outerExt) }
+			}
+			if err := marshal(); err != nil {
 				return err
 			}
 
