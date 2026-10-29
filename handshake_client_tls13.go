@@ -415,7 +415,10 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 			for _, ext := range hs.uconn.Extensions {
 				// new ks seems to be generated either way
 				if ks, ok := ext.(*KeyShareExtension); ok {
-					ks.KeyShares = keyShares(hs.hello.keyShares).ToPublic()
+					// [eidolon] hello, not hs.hello: with ECH accepted, the
+					// new key share is in ClientHelloInner, and the outer
+					// key_share is the one the inner compresses.
+					ks.KeyShares = keyShares(hello.keyShares).ToPublic()
 					keyShareExtFound = true
 				}
 			}
