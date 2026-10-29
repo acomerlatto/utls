@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/cryptobyte"
@@ -26,6 +27,48 @@ func TestEidolonParseECHConfigList(t *testing.T) {
 	} {
 		if _, err := parseECHConfigList(list); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// [eidolon] The public name follows BoringSSL ssl_is_valid_ech_public_name.
+func TestEidolonECHPublicName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"public.example":        true,
+		"localhost":             true,
+		"a-b.example":           true,
+		"x.1a":                  true,
+		"x.0xg":                 true,
+		"x.1x5":                 true,
+		strings.Repeat("a", 63): true,
+		"":                      false,
+		".example":              false,
+		"example.":              false,
+		"a..example":            false,
+		"-a.example":            false,
+		"a-.example":            false,
+		"a_b.example":           false,
+		strings.Repeat("a", 64): false,
+		"127.0.0.1":             false,
+		"127.1":                 false,
+		"example.42":            false,
+		"example.0x":            false,
+		"example.0XfF":          false,
+		"exa mple.com":          false,
+	} {
+		if got := validDNSName(name); got != want {
+			t.Errorf("validDNSName(%q) = %v, want %v", name, got, want)
+		}
+	}
+	// A configuration with an IPv4 public name is skipped.
+	for name, want := range map[string]bool{"public.example": true, "127.1": false} {
+		_, list := eidolonECHConfig(1, make([]byte, 32), name)
+		configs, err := parseECHConfigList(list)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c, _, _, _ := pickECHConfig(configs); (c != nil) != want {
+			t.Errorf("%s: picked %v, want %v", name, c != nil, want)
 		}
 	}
 }

@@ -468,31 +468,34 @@ func computeAndUpdateOuterECHExtension(outer, inner *clientHelloMsg, ech *echCli
 	return nil
 }
 
-// validDNSName is a rather rudimentary check for the validity of a DNS name.
-// This is used to check if the public_name in a ECHConfig is valid when we are
-// picking a config. This can be somewhat lax because even if we pick a
-// valid-looking name, the DNS layer will later reject it anyway.
+// validDNSName reports whether name is a valid public_name, as BoringSSL
+// ssl_is_valid_ech_public_name decides (RFC 9849, Sections 4 and 6.1.7):
+// dot-separated LDH labels of 1 to 63 bytes, and a last label that the
+// WHATWG URL parser does not read as an IPv4 number, neither decimal nor
+// hexadecimal.
+//
+// [eidolon] uTLS accepted a name ending in a number, such as "127.0.0.1"
+// or "127.1": the outer SNI was then empty, and the certificate of a
+// rejection was not verified for any name.
 func validDNSName(name string) bool {
-	if len(name) > 253 {
-		return false
-	}
 	labels := strings.Split(name, ".")
-	if len(labels) <= 1 {
-		return false
-	}
 	for _, l := range labels {
-		labelLen := len(l)
-		if labelLen == 0 {
+		if len(l) == 0 || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
 			return false
 		}
-		for i, r := range l {
-			if r == '-' && (i == 0 || i == labelLen-1) {
-				return false
-			}
+		for _, r := range l {
 			if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && r != '-' {
 				return false
 			}
 		}
+	}
+	last := labels[len(labels)-1]
+	if strings.Trim(last, "0123456789") == "" {
+		return false
+	}
+	if len(last) >= 2 && last[0] == '0' && (last[1] == 'x' || last[1] == 'X') &&
+		strings.Trim(last[2:], "0123456789abcdefABCDEF") == "" {
+		return false
 	}
 	return true
 }
