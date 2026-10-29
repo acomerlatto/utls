@@ -189,7 +189,7 @@ func (c *Conn) makeClientHello() (*clientHelloMsg, *keySharePrivateKeys, *echCli
 		}
 		echConfig, echPK, kdf, aead := pickECHConfig(echConfigs)
 		if echConfig == nil {
-			return nil, nil, nil, errors.New("tls: EncryptedClientHelloConfigList contains no valid configs")
+			return nil, nil, nil, ErrNoUsableECHConfig // [eidolon]
 		}
 		ech = &echClientContext{config: echConfig, kdfID: kdf.ID(), aeadID: aead.ID()}
 		hello.encryptedClientHello = []byte{1} // indicate inner hello

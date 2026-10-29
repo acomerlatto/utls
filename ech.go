@@ -41,7 +41,17 @@ type echConfig struct {
 	Extensions    []echExtension
 }
 
-var errMalformedECHConfigList = errors.New("tls: malformed ECHConfigList")
+// [eidolon] ErrMalformedECHConfigList and ErrNoUsableECHConfig tell the two
+// failures of Config.EncryptedClientHelloConfigList apart, as BoringSSL
+// does: SSL_set1_ech_config_list refuses a list without the syntax of
+// ssl_is_valid_ech_config_list, and the handshake one without an ECHConfig
+// ssl_select_ech_config can use. Chrome fails a connection on the first
+// (ERR_INVALID_ECH_CONFIG_LIST) and, unless ECH is required, sends GREASE
+// ECH on the second. Both come wrapped from the handshake.
+var (
+	ErrMalformedECHConfigList = errors.New("tls: malformed ECHConfigList")
+	ErrNoUsableECHConfig      = errors.New("tls: EncryptedClientHelloConfigList contains no valid configs")
+)
 
 type echConfigErr struct {
 	field string
@@ -129,15 +139,15 @@ func parseECHConfigList(data []byte) ([]echConfig, error) {
 	// hold trailing bytes, and its length in 16 bits wrapped around and
 	// looped over the same ECHConfig forever.
 	if !isValidECHConfigList(data) {
-		return nil, errMalformedECHConfigList
+		return nil, ErrMalformedECHConfigList
 	}
 	s := cryptobyte.String(data)
 	var length uint16
 	if !s.ReadUint16(&length) {
-		return nil, errMalformedECHConfigList
+		return nil, ErrMalformedECHConfigList
 	}
 	if length != uint16(len(data)-2) {
-		return nil, errMalformedECHConfigList
+		return nil, ErrMalformedECHConfigList
 	}
 	var configs []echConfig
 	for len(s) > 0 {
