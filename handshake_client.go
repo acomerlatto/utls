@@ -1172,22 +1172,20 @@ func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
 				return err
 			}
 		} else {
+			// [eidolon] The rejection is authenticated for the name of
+			// ClientHelloOuter, the public name of the ECHConfig (RFC
+			// 9849, Section 6.1.7), not for Config.ServerName or
+			// InsecureServerNameToVerify, which name ClientHelloInner.
 			opts := x509.VerifyOptions{
-				Roots:       c.config.RootCAs,
-				CurrentTime: c.config.time(),
-				// DNSName:       c.serverName, // [uTLS]
+				Roots:         c.config.RootCAs,
+				CurrentTime:   c.config.time(),
+				DNSName:       c.serverName,
 				Intermediates: x509.NewCertPool(),
 			}
 
 			// [UTLS SECTION START]
 			if c.config.InsecureSkipTimeVerify {
 				opts.CurrentTime = certs[0].NotAfter
-			}
-
-			if len(c.config.InsecureServerNameToVerify) == 0 {
-				opts.DNSName = c.config.ServerName
-			} else if c.config.InsecureServerNameToVerify != "*" {
-				opts.DNSName = c.config.InsecureServerNameToVerify
 			}
 			// [UTLS SECTION END]
 
