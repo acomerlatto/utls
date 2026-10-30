@@ -38,6 +38,7 @@ The module path is `github.com/acomerlatto/utls`, so consumers need no `replace`
 | U15 | `84db2bb` | After a HelloRetryRequest that rejects ECH, the second ClientHelloOuter carries the encrypted_client_hello extension of the first, as BoringSSL; uTLS sent the GREASE ECH extension of the spec | `u_eidolon_ech_hrr_test.go` |
 | U16 | `3d64fbd` | A TLS 1.2 server is an ECH rejection, as in BoringSSL: TLS 1.2 accepted when the spec offered it and `MinVersion` is unset, certificate verified for the public name, no client certificate, no saved session, alert `ech_required` and an `ECHRejectionError` without retry configurations; uTLS failed with `unsupported protocol version 303` | `u_eidolon_ech_tls12_test.go` |
 | U17 | `3cef2ab` | `ErrMalformedECHConfigList` and `ErrNoUsableECHConfig` exported, as BoringSSL tells the two apart: `SSL_set1_ech_config_list` refuses a list without its syntax and the handshake one without a usable ECHConfig, which Chrome answers with GREASE ECH unless ECH is required; uTLS returned an unexported error and an `errors.New` | `u_eidolon_ech_errors_test.go` |
+| U18 | `0d175ce` | With `PreferSkipResumptionOnNilExtension`, a TLS 1.2 session in the cache and a spec with pre_shared_key but without session_ticket make a full handshake; uTLS skipped the ticket, then set it and panicked on its state assertion | `u_eidolon_session_test.go` |
 | — | `742ee01` | Module path `github.com/refraction-networking/utls` → `github.com/acomerlatto/utls` | `go build ./...`, `go test ./...` |
 
 ## Syncing
