@@ -4,13 +4,14 @@ package tls
 
 import (
 	"errors"
+	"io"
 
 	"golang.org/x/crypto/cryptobyte"
 )
 
 // echInnerOmitted holds the extensions of ClientHelloOuter that BoringSSL
 // leaves out of ClientHelloInner: those of TLS 1.2 and below, the padding
-// of the outer and the PSK, which a custom ECH ClientHello does not offer.
+// of the outer and the PSK, which ClientHelloOuter does not offer.
 var echInnerOmitted = map[uint16]bool{
 	extensionExtendedMasterSecret: true,
 	extensionRenegotiationInfo:    true,
@@ -54,10 +55,11 @@ var echInnerCompressed = map[uint16]bool{
 // server_name has serverName (none when empty), encrypted_client_hello is
 // of type inner and supported_versions keeps GREASE and TLS 1.3. The
 // extensions of echInnerOmitted are left out, and those of
-// echInnerCompressed and GREASE go last, in their order, replaced by
-// ech_outer_extensions in EncodedClientHelloInner. Other extensions are
-// copied.
-func echInner(outer, random []byte, serverName string, maxNameLength int) (inner, encoded []byte, err error) {
+// echInnerCompressed and GREASE go after the others, in their order,
+// replaced by ech_outer_extensions in EncodedClientHelloInner. Other
+// extensions are copied. A non-nil psk goes last in both, uncompressed,
+// with its binder over ClientHelloInner.
+func echInner(outer, random []byte, serverName string, maxNameLength int, psk *UtlsPreSharedKeyExtension) (inner, encoded []byte, err error) {
 	errMalformed := errors.New("tls: malformed ClientHelloOuter")
 	s := cryptobyte.String(outer)
 	var sessionID, suites, compression, exts cryptobyte.String
@@ -150,6 +152,13 @@ func echInner(outer, random []byte, serverName string, maxNameLength int) (inner
 	if err != nil {
 		return nil, nil, err
 	}
+	var pskExt []byte
+	if psk != nil {
+		pskExt = make([]byte, psk.Len())
+		if _, err := psk.Read(pskExt); err != nil && err != io.EOF {
+			return nil, nil, err
+		}
+	}
 
 	// hello writes the ClientHello body up to the extensions.
 	hello := func(b *cryptobyte.Builder, sessionID []byte) {
@@ -171,27 +180,37 @@ func echInner(outer, random []byte, serverName string, maxNameLength int) (inner
 		b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
 			b.AddBytes(plainExts)
 			b.AddBytes(compressedExts)
+			b.AddBytes(pskExt)
 		})
 	})
 	if inner, err = ib.Bytes(); err != nil {
 		return nil, nil, err
+	}
+	if psk != nil {
+		if err := psk.bindInner(inner); err != nil {
+			return nil, nil, err
+		}
+		if _, err := psk.Read(pskExt); err != nil && err != io.EOF {
+			return nil, nil, err
+		}
+		copy(inner[len(inner)-len(pskExt):], pskExt)
 	}
 
 	var eb cryptobyte.Builder
 	hello(&eb, nil)
 	eb.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
 		b.AddBytes(plainExts)
-		if len(compressedTypes) == 0 {
-			return
-		}
-		b.AddUint16(extensionECHOuterExtensions)
-		b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
-			b.AddUint8LengthPrefixed(func(b *cryptobyte.Builder) {
-				for _, typ := range compressedTypes {
-					b.AddUint16(typ)
-				}
+		if len(compressedTypes) > 0 {
+			b.AddUint16(extensionECHOuterExtensions)
+			b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+				b.AddUint8LengthPrefixed(func(b *cryptobyte.Builder) {
+					for _, typ := range compressedTypes {
+						b.AddUint16(typ)
+					}
+				})
 			})
-		})
+		}
+		b.AddBytes(pskExt)
 	})
 	if encoded, err = eb.Bytes(); err != nil {
 		return nil, nil, err
@@ -205,4 +224,58 @@ func echInner(outer, random []byte, serverName string, maxNameLength int) (inner
 	}
 	paddingLen += 31 - ((len(encoded) + paddingLen - 1) % 32)
 	return inner, append(encoded, make([]byte, paddingLen)...), nil
+}
+
+// bindInner sets the binder of e, the last extension of ClientHelloInner
+// inner, as BoringSSL binds a PSK offered with ECH: over ClientHelloInner
+// and, after a HelloRetryRequest, the inner transcript before it
+// (ext_pre_shared_key_add_clienthello).
+func (e *UtlsPreSharedKeyExtension) bindInner(inner []byte) error {
+	bindersLen := 2
+	for _, binder := range e.Binders {
+		bindersLen += 1 + len(binder)
+	}
+	transcript := e.cipherSuite.hash.New()
+	if len(e.prevClientHelloHash) > 0 {
+		transcript.Write([]byte{typeMessageHash, 0, 0, uint8(len(e.prevClientHelloHash))})
+		transcript.Write(e.prevClientHelloHash)
+		if err := transcriptMsg(e.serverHello, transcript); err != nil {
+			return err
+		}
+	}
+	transcript.Write(inner[:len(inner)-bindersLen])
+	e.Binders = [][]byte{e.cipherSuite.finishedHash(e.BinderKey, transcript)}
+	return nil
+}
+
+// echPSK returns the PSK extension that carries the session to resume,
+// which with ECH goes in ClientHelloInner only, or nil without a session.
+// Only UtlsPreSharedKeyExtension can be bound to ClientHelloInner.
+func (uconn *UConn) echPSK() (*UtlsPreSharedKeyExtension, error) {
+	n := len(uconn.Extensions)
+	if n == 0 {
+		return nil, nil
+	}
+	ext, ok := uconn.Extensions[n-1].(PreSharedKeyExtension)
+	if !ok || ext.Len() == 0 {
+		return nil, nil
+	}
+	psk, ok := ext.(*UtlsPreSharedKeyExtension)
+	if !ok {
+		return nil, errors.New("tls: PSK resumption with a custom ECH ClientHello requires UtlsPreSharedKeyExtension")
+	}
+	return psk, nil
+}
+
+// marshalOuter marshals ClientHelloOuter, without the PSK extension, which
+// BoringSSL never offers in ClientHelloOuter (should_offer_psk).
+func (uconn *UConn) marshalOuter() error {
+	exts := uconn.Extensions
+	defer func() { uconn.Extensions = exts }()
+	if n := len(exts); n > 0 {
+		if _, ok := exts[n-1].(PreSharedKeyExtension); ok {
+			uconn.Extensions = exts[:n-1]
+		}
+	}
+	return uconn.MarshalClientHelloNoECH()
 }

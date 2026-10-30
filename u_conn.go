@@ -197,7 +197,11 @@ func (uconn *UConn) uLoadSession() error {
 func (uconn *UConn) uApplyPatch() {
 	helloLen := len(uconn.HandshakeState.Hello.Raw)
 	if uconn.sessionController.shouldUpdateBinders() {
-		uconn.sessionController.updateBinders()
+		// [eidolon] With ECH, ClientHelloOuter has no PSK to patch: its
+		// binder was computed with ClientHelloInner.
+		if len(uconn.config.EncryptedClientHelloConfigList) == 0 {
+			uconn.sessionController.updateBinders()
+		}
 		uconn.sessionController.setPskToUConn()
 	}
 	uAssert(helloLen == len(uconn.HandshakeState.Hello.Raw), "tls: uApplyPatch Failed: the patch should never change the length of the marshaled clientHello")
@@ -505,10 +509,14 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 	// [eidolon] ClientHelloInner is built from the extensions of
 	// ClientHelloOuter, as BoringSSL builds it, and replaces inner, which
 	// keeps its random.
-	if err := uconn.MarshalClientHelloNoECH(); err != nil {
+	psk, err := uconn.echPSK()
+	if err != nil {
 		return err
 	}
-	innerMsg, encodedInner, err := echInner(uconn.HandshakeState.Hello.Raw, inner.random, hostnameInSNI(uconn.config.ServerName), int(ech.config.MaxNameLength))
+	if err := uconn.marshalOuter(); err != nil {
+		return err
+	}
+	innerMsg, encodedInner, err := echInner(uconn.HandshakeState.Hello.Raw, inner.random, hostnameInSNI(uconn.config.ServerName), int(ech.config.MaxNameLength), psk)
 	if err != nil {
 		return err
 	}
@@ -560,20 +568,11 @@ func (uconn *UConn) marshalClientHelloWithECH(ech []byte) error {
 		Id:   extensionEncryptedClientHello,
 		Data: ech,
 	}
-	return uconn.MarshalClientHelloNoECH()
+	return uconn.marshalOuter()
 }
 
 func (uconn *UConn) MarshalClientHello() error {
 	if len(uconn.config.EncryptedClientHelloConfigList) > 0 {
-		// Real PSKs must only appear in ClientHelloInner. The custom PSK
-		// controller patches binders in the outer hello, so reject this
-		// combination until it supports the inner transcript. GREASE ECH
-		// does not enter this path and can still be combined with PSK.
-		for _, ext := range uconn.Extensions {
-			if psk, ok := ext.(PreSharedKeyExtension); ok && psk.Len() > 0 {
-				return errors.New("tls: PSK resumption with a custom ECH ClientHello is not supported")
-			}
-		}
 		inner, _, ech, err := uconn.makeClientHello()
 		if err != nil {
 			return err

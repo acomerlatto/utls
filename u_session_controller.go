@@ -200,8 +200,12 @@ func (s *sessionController) setPskToUConn() {
 	if s.state == PskExtInitialized {
 		s.uconnRef.HandshakeState.State13.EarlySecret = pskCommon.EarlySecret
 		s.uconnRef.HandshakeState.Session = pskCommon.Session
-		s.uconnRef.HandshakeState.Hello.PskIdentities = pskCommon.Identities
-		s.uconnRef.HandshakeState.Hello.PskBinders = pskCommon.Binders
+		// [eidolon] With ECH, the PSK is in ClientHelloInner only, and
+		// ClientHelloOuter offers none.
+		if len(s.uconnRef.config.EncryptedClientHelloConfigList) == 0 {
+			s.uconnRef.HandshakeState.Hello.PskIdentities = pskCommon.Identities
+			s.uconnRef.HandshakeState.Hello.PskBinders = pskCommon.Binders
+		}
 	} else if s.state == PskExtAllSet {
 		uAssert(s.uconnRef.HandshakeState.Session == pskCommon.Session && sliceEq(s.uconnRef.HandshakeState.State13.EarlySecret, pskCommon.EarlySecret) &&
 			allTrue(s.uconnRef.HandshakeState.Hello.PskIdentities, func(i int, psk *PskIdentity) bool {

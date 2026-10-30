@@ -467,7 +467,16 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 				return err
 			}
 
-			if len(hs.hello.pskIdentities) > 0 {
+			if isInnerHello {
+				// [eidolon] With ECH accepted, the PSK is in
+				// ClientHelloInner, bound when it is built again below;
+				// UpdateOnHRR leaves it out when its hash does not match.
+				if n := len(hs.uconn.Extensions); n > 0 {
+					if psk, ok := hs.uconn.Extensions[n-1].(*UtlsPreSharedKeyExtension); ok {
+						psk.UpdateOnHRR(chHash, hs, c.config.time())
+					}
+				}
+			} else if len(hs.hello.pskIdentities) > 0 {
 				for _, ext := range hs.uconn.Extensions {
 					if psk, ok := ext.(PreSharedKeyExtension); ok {
 						if err := psk.UpdateOnHRR(chHash, hs, c.config.time()); err != nil {

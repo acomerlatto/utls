@@ -13,7 +13,6 @@ import (
 )
 
 const utlsTestECHConfigsHex = "0045fe0d0041590020002092a01233db2218518ccbbbbc24df20686af417b37388de6460e94011974777090004000100010012636c6f7564666c6172652d6563682e636f6d0000"
-const utlsTestCustomECHPSKError = "tls: PSK resumption with a custom ECH ClientHello is not supported"
 
 func TestUTLSECHPreSharedKeyPrivacy(t *testing.T) {
 	// This is the supported X25519 ECHConfigList used in ech_test.go. A
@@ -24,12 +23,11 @@ func TestUTLSECHPreSharedKeyPrivacy(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name       string
-		realECH    bool
-		populated  bool
-		wantReject bool
+		name      string
+		realECH   bool
+		populated bool
 	}{
-		{name: "RealECHWithPSK", realECH: true, populated: true, wantReject: true},
+		{name: "RealECHWithPSK", realECH: true, populated: true},
 		{name: "RealECHWithEmptyPSK", realECH: true},
 		{name: "GREASEECHWithPSK", populated: true},
 	} {
@@ -48,25 +46,12 @@ func TestUTLSECHPreSharedKeyPrivacy(t *testing.T) {
 			if tc.populated {
 				// Model an initialized extension after the session controller has
 				// loaded a ticket, immediately before ClientHello serialization.
-				psk.PreSharedKeyCommon = PreSharedKeyCommon{
-					Session:    &SessionState{version: VersionTLS13, cipherSuite: TLS_AES_128_GCM_SHA256},
-					Identities: []PskIdentity{{Label: label}},
-					Binders:    [][]byte{make([]byte, 32)},
-				}
+				psk.InitializeByUtls(&SessionState{version: VersionTLS13, cipherSuite: TLS_AES_128_GCM_SHA256},
+					make([]byte, 32), make([]byte, 32), []PskIdentity{{Label: label}})
 			}
 			client.Extensions = append(client.Extensions, psk)
 
-			err := client.MarshalClientHello()
-			if tc.wantReject {
-				if err == nil {
-					t.Fatalf("real ECH with PSK must fail explicitly until inner binders are supported; ticket exposed in outer: %v", bytes.Contains(client.HandshakeState.Hello.Raw, label))
-				}
-				if err.Error() != utlsTestCustomECHPSKError {
-					t.Fatalf("expected explicit ECH/PSK error, got %v", err)
-				}
-				return
-			}
-			if err != nil {
+			if err := client.MarshalClientHello(); err != nil {
 				t.Fatal(err)
 			}
 			outer := new(clientHelloMsg)
@@ -76,7 +61,15 @@ func TestUTLSECHPreSharedKeyPrivacy(t *testing.T) {
 			if len(outer.encryptedClientHello) == 0 {
 				t.Fatal("missing ECH extension")
 			}
-			if tc.populated {
+			// [eidolon] With real ECH, the PSK is in ClientHelloInner only.
+			if tc.realECH && tc.populated {
+				if bytes.Contains(client.HandshakeState.Hello.Raw, label) || len(outer.pskIdentities) != 0 {
+					t.Fatal("real ECH exposed the PSK in ClientHelloOuter")
+				}
+				if inner := client.echCtx.innerHello; len(inner.pskIdentities) != 1 || !bytes.Equal(inner.pskIdentities[0].label, label) {
+					t.Fatal("real ECH left the PSK out of ClientHelloInner")
+				}
+			} else if tc.populated {
 				if len(outer.pskIdentities) != 1 || !bytes.Equal(outer.pskIdentities[0].label, label) {
 					t.Fatal("GREASE ECH removed the ordinary PSK identity")
 				}
@@ -125,25 +118,27 @@ func TestUTLSECHCachedSessionPrivacy(t *testing.T) {
 			if err := client.ApplyPreset(&preset); err != nil {
 				t.Fatal(err)
 			}
-			err = client.BuildHandshakeState()
-			if realECH {
-				if err == nil || err.Error() != utlsTestCustomECHPSKError {
-					t.Fatalf("cached session with real ECH must fail before patching binders, got %v", err)
-				}
-				return
-			}
-			if err != nil {
+			if err := client.BuildHandshakeState(); err != nil {
 				t.Fatal(err)
 			}
 			outer := new(clientHelloMsg)
 			if !outer.unmarshal(client.HandshakeState.Hello.Raw) {
-				t.Fatal("invalid GREASE ECH ClientHello")
+				t.Fatal("invalid ClientHello")
 			}
-			if len(outer.pskIdentities) != 1 || !bytes.Equal(outer.pskIdentities[0].label, label) {
-				t.Fatal("GREASE ECH did not load the cached session")
+			// [eidolon] With real ECH, the session is in ClientHelloInner
+			// only, with its binder.
+			hello := outer
+			if realECH {
+				if bytes.Contains(client.HandshakeState.Hello.Raw, label) || len(outer.pskIdentities) != 0 {
+					t.Fatal("real ECH exposed the cached session in ClientHelloOuter")
+				}
+				hello = client.echCtx.innerHello
 			}
-			if len(outer.pskBinders) != 1 || len(outer.pskBinders[0]) != 32 || bytes.Equal(outer.pskBinders[0], make([]byte, 32)) {
-				t.Fatal("GREASE ECH did not compute the cached session's binder")
+			if len(hello.pskIdentities) != 1 || !bytes.Equal(hello.pskIdentities[0].label, label) {
+				t.Fatal("the cached session was not loaded")
+			}
+			if len(hello.pskBinders) != 1 || len(hello.pskBinders[0]) != 32 || bytes.Equal(hello.pskBinders[0], make([]byte, 32)) {
+				t.Fatal("the cached session's binder was not computed")
 			}
 		})
 	}

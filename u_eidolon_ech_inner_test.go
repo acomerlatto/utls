@@ -102,7 +102,7 @@ func TestEidolonECHInnerEncoding(t *testing.T) {
 	outerRaw := u.HandshakeState.Hello.Raw
 	random := bytes.Repeat([]byte{7}, 32)
 	for _, name := range []string{"secret.example", ""} {
-		inner, encoded, err := echInner(outerRaw, random, name, 32)
+		inner, encoded, err := echInner(outerRaw, random, name, 32, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,13 +153,13 @@ func TestEidolonECHInnerPadding(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"secret.example", ""} {
-		_, unpadded, err := echInner(u.HandshakeState.Hello.Raw, make([]byte, 32), name, 0)
+		_, unpadded, err := echInner(u.HandshakeState.Hello.Raw, make([]byte, 32), name, 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		unpadded = bytes.TrimRight(unpadded, "\x00")
 		for maxLen := 0; maxLen < 64; maxLen++ {
-			_, encoded, err := echInner(u.HandshakeState.Hello.Raw, make([]byte, 32), name, maxLen)
+			_, encoded, err := echInner(u.HandshakeState.Hello.Raw, make([]byte, 32), name, maxLen, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -217,7 +217,7 @@ func TestEidolonECHInnerExtensions(t *testing.T) {
 		{utlsExtensionPadding, make([]byte, 7)},
 		{extensionPreSharedKey, []byte{0, 0}},
 	})
-	inner, _, err := echInner(outer, make([]byte, 32), "secret.example", 0)
+	inner, _, err := echInner(outer, make([]byte, 32), "secret.example", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
