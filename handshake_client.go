@@ -418,6 +418,12 @@ func (c *Conn) loadSession(hello *clientHelloMsg) (
 	if !versOk {
 		return nil, nil, nil, nil
 	}
+	// [eidolon] As BoringSSL, no TLS 1.2 session with ECH: ClientHelloInner
+	// does not offer TLS 1.2, and its ticket in ClientHelloOuter would be
+	// seen by everyone.
+	if session.version != VersionTLS13 && len(c.config.EncryptedClientHelloConfigList) > 0 {
+		return nil, nil, nil, nil
+	}
 
 	// [UTLS SECTION START]
 	if !c.config.InsecureSkipTimeVerify {
