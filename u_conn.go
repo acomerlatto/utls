@@ -182,7 +182,10 @@ func (uconn *UConn) uLoadSession() error {
 		if session.version == VersionTLS12 {
 			// We use the session ticket extension for tls 1.2 session resumption
 			uconn.sessionController.initSessionTicketExt(session, hello.sessionTicket)
-			uconn.sessionController.setSessionTicketToUConn()
+			// [eidolon] Skipped without the extension (assertCanSkip).
+			if uconn.sessionController.state == SessionTicketExtInitialized {
+				uconn.sessionController.setSessionTicketToUConn()
+			}
 		} else {
 			uconn.sessionController.initPskExt(session, earlySecret, binderKey, hello.pskIdentities)
 		}
